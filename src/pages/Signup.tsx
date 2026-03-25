@@ -20,15 +20,23 @@ const Signup: React.FC = () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name, email, password }),
       });
-      const data = await res.json();
+      
+      let data;
+      try {
+        data = await res.json();
+      } catch (e) {
+        throw new Error("Server returned an invalid response");
+      }
+
       if (res.ok) {
         login(data);
         navigate("/join-group");
       } else {
         setError(data.error || "Signup failed");
       }
-    } catch (err) {
-      setError("Something went wrong. Please try again.");
+    } catch (err: any) {
+      console.error("Signup error:", err);
+      setError(err.message || "Something went wrong. Please try again.");
     }
   };
 

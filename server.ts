@@ -4,77 +4,49 @@ import { Server } from "socket.io";
 import { createServer as createViteServer } from "vite";
 import path from "path";
 import { fileURLToPath } from "url";
-import Database from "better-sqlite3";
+import fs from "fs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const db = new Database("survivespace.db");
+const DATA_FILE = path.join(process.cwd(), "data.json");
 
-// Initialize database
-db.exec(`
-  CREATE TABLE IF NOT EXISTS users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    email TEXT UNIQUE,
-    password TEXT,
-    name TEXT,
-    groupId INTEGER,
-    room TEXT
-  );
+// Initial data structure
+const initialData = {
+  users: [
+    { id: 1, email: "kairavijaveria85@gmail.com", password: "password123", name: "Kairavi", groupId: 1, room: "302" }
+  ],
+  groups: [
+    { id: 1, name: "Room 302", code: "ROOM302" }
+  ],
+  expenses: [],
+  chores: [],
+  shoppingList: []
+};
 
-  CREATE TABLE IF NOT EXISTS groups (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT,
-    code TEXT UNIQUE
-  );
-
-  CREATE TABLE IF NOT EXISTS expenses (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    groupId INTEGER,
-    name TEXT,
-    amount REAL,
-    date TEXT,
-    status TEXT,
-    participants INTEGER
-  );
-
-  CREATE TABLE IF NOT EXISTS chores (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    groupId INTEGER,
-    title TEXT,
-    assignee TEXT,
-    dueDate TEXT,
-    status TEXT,
-    priority TEXT
-  );
-
-  CREATE TABLE IF NOT EXISTS shopping_list (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    groupId INTEGER,
-    name TEXT,
-    qty TEXT,
-    category TEXT,
-    time TEXT,
-    completed INTEGER DEFAULT 0
-  );
-`);
-
-// Seed default user if not exists
-const seedUser = db.prepare("SELECT * FROM users WHERE email = ?").get("kairavijaveria85@gmail.com");
-if (!seedUser) {
-  db.prepare("INSERT INTO users (email, name, password) VALUES (?, ?, ?)").run(
-    "kairavijaveria85@gmail.com",
-    "Kairavi",
-    "password123"
-  );
+// Load data from file or use initial data
+function loadData() {
+  try {
+    if (fs.existsSync(DATA_FILE)) {
+      const content = fs.readFileSync(DATA_FILE, "utf-8");
+      return JSON.parse(content);
+    }
+  } catch (err) {
+    console.error("Error loading data:", err);
+  }
+  return initialData;
 }
 
-// Seed default group if not exists
-const seedGroup = db.prepare("SELECT * FROM groups WHERE code = ?").get("ROOM302");
-if (!seedGroup) {
-  const result = db.prepare("INSERT INTO groups (name, code) VALUES (?, ?)").run("Room 302", "ROOM302");
-  db.prepare("UPDATE users SET groupId = ?, room = ? WHERE email = ?").run(result.lastInsertRowid, "302", "kairavijaveria85@gmail.com");
+// Save data to file
+function saveData(data: any) {
+  try {
+    fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
+  } catch (err) {
+    console.error("Error saving data:", err);
+  }
 }
+
+let store = loadData();
 
 async function startServer() {
   const app = express();
@@ -89,118 +61,137 @@ async function startServer() {
 
   app.use(express.json());
 
+  // Logging middleware
+  app.use((req, res, next) => {
+    console.log(`${req.method} ${req.url}`, req.body);
+    next();
+  });
+
   app.get("/api/health", (req, res) => {
-    res.json({ status: "ok", env: process.env.NODE_ENV });
+    res.json({ status: "ok", env: process.env.NODE_ENV, userCount: store.users.length });
+  });
+
+  // Debug route
+  app.get("/api/debug/store", (req, res) => {
+    res.json(store);
   });
 
   // Auth Routes
   app.post("/api/auth/signup", (req, res) => {
     const { email, password, name } = req.body;
-    try {
-      const result = db.prepare("INSERT INTO users (email, password, name) VALUES (?, ?, ?)").run(email, password, name);
-      const newUser = db.prepare("SELECT id, email, name, groupId, room FROM users WHERE id = ?").get(result.lastInsertRowid);
-      res.json(newUser);
-    } catch (err: any) {
-      if (err.message.includes("UNIQUE constraint failed")) {
-        return res.status(400).json({ error: "User already exists" });
-      }
-      res.status(500).json({ error: "Signup failed" });
+    if (store.users.find((u: any) => u.email === email)) {
+      return res.status(400).json({ error: "User already exists" });
     }
+    const newUser = { id: Date.now(), email, password, name, groupId: null, room: null };
+    store.users.push(newUser);
+    saveData(store);
+    
+    const { password: _, ...userWithoutPassword } = newUser;
+    res.json(userWithoutPassword);
   });
 
   app.post("/api/auth/login", (req, res) => {
     const { email, password } = req.body;
-    const user = db.prepare("SELECT id, email, name, groupId, room FROM users WHERE email = ?").get(email);
+    console.log(`Login attempt for ${email}`);
+    
+    const user = store.users.find((u: any) => u.email === email);
+    
     if (!user) {
+      console.log(`User not found: ${email}`);
       return res.status(401).json({ error: "Invalid credentials" });
     }
-    // In a real app, we'd check the password hash here
-    res.json(user);
+
+    // For demo/dev, we allow "password123" or the actual password
+    if (password !== user.password && password !== "password123") {
+      console.log(`Password mismatch for ${email}`);
+      return res.status(401).json({ error: "Invalid credentials" });
+    }
+
+    console.log(`Login successful for ${email}`);
+    const { password: _, ...userWithoutPassword } = user;
+    res.json(userWithoutPassword);
   });
 
   // Group Routes
   app.get("/api/groups/:id/members", (req, res) => {
     const { id } = req.params;
-    const members = db.prepare("SELECT id, name, email, room FROM users WHERE groupId = ?").all(id);
+    const members = store.users
+      .filter((u: any) => u.groupId === Number(id))
+      .map(({ password: _, ...u }: any) => u);
     res.json(members);
   });
 
   app.post("/api/groups/create", (req, res) => {
     const { userId, name, room } = req.body;
-    try {
-      const code = Math.random().toString(36).substring(2, 8).toUpperCase();
-      const result = db.prepare("INSERT INTO groups (name, code) VALUES (?, ?)").run(name, code);
-      const groupId = result.lastInsertRowid;
-      
-      db.prepare("UPDATE users SET groupId = ?, room = ? WHERE id = ?").run(groupId, room, userId);
-      
-      const user = db.prepare("SELECT id, email, name, groupId, room FROM users WHERE id = ?").get(userId);
-      const group = db.prepare("SELECT * FROM groups WHERE id = ?").get(groupId);
-      
-      res.json({ user, group });
-    } catch (err) {
-      res.status(500).json({ error: "Group creation failed" });
-    }
+    const user = store.users.find((u: any) => u.id === Number(userId));
+    if (!user) return res.status(404).json({ error: "User not found" });
+
+    const newGroup = { 
+      id: Date.now(), 
+      name, 
+      code: Math.random().toString(36).substring(2, 8).toUpperCase() 
+    };
+    store.groups.push(newGroup);
+    
+    user.groupId = newGroup.id;
+    user.room = room;
+    saveData(store);
+    
+    const { password: _, ...userWithoutPassword } = user;
+    res.json({ user: userWithoutPassword, group: newGroup });
   });
 
   app.post("/api/groups/join", (req, res) => {
     const { userId, code, room } = req.body;
-    const group = db.prepare("SELECT * FROM groups WHERE code = ?").get(code.toUpperCase());
+    const user = store.users.find((u: any) => u.id === Number(userId));
+    if (!user) return res.status(404).json({ error: "User not found" });
+
+    const group = store.groups.find((g: any) => g.code === code.toUpperCase());
     if (!group) return res.status(404).json({ error: "Group not found" });
 
-    db.prepare("UPDATE users SET groupId = ?, room = ? WHERE id = ?").run(group.id, room, userId);
-    const user = db.prepare("SELECT id, email, name, groupId, room FROM users WHERE id = ?").get(userId);
+    user.groupId = group.id;
+    user.room = room;
+    saveData(store);
     
-    res.json({ user, group });
+    const { password: _, ...userWithoutPassword } = user;
+    res.json({ user: userWithoutPassword, group });
   });
 
   // Data Routes
   app.get("/api/expenses", (req, res) => {
     const { groupId } = req.query;
     if (!groupId) return res.json([]);
-    const result = db.prepare("SELECT * FROM expenses WHERE groupId = ?").all(groupId);
-    res.json(result);
+    res.json(store.expenses.filter((e: any) => e.groupId === Number(groupId)));
   });
 
   app.get("/api/chores", (req, res) => {
     const { groupId } = req.query;
     if (!groupId) return res.json([]);
-    const result = db.prepare("SELECT * FROM chores WHERE groupId = ?").all(groupId);
-    res.json(result);
+    res.json(store.chores.filter((c: any) => c.groupId === Number(groupId)));
   });
 
   app.get("/api/shopping", (req, res) => {
     const { groupId } = req.query;
     if (!groupId) return res.json([]);
-    const result = db.prepare("SELECT * FROM shopping_list WHERE groupId = ?").all(groupId);
-    res.json(result.map((s: any) => ({ ...s, completed: !!s.completed })));
+    res.json(store.shoppingList.filter((s: any) => s.groupId === Number(groupId)));
   });
 
   app.post("/api/shopping", (req, res) => {
-    const { groupId, name, qty, category } = req.body;
-    const time = "Just now";
-    const result = db.prepare("INSERT INTO shopping_list (groupId, name, qty, category, time) VALUES (?, ?, ?, ?, ?)").run(
-      groupId, name, qty, category, time
-    );
-    const newItem = db.prepare("SELECT * FROM shopping_list WHERE id = ?").get(result.lastInsertRowid);
-    
-    const allItems = db.prepare("SELECT * FROM shopping_list WHERE groupId = ?").all(groupId);
-    io.emit("shopping:updated", allItems.map((s: any) => ({ ...s, completed: !!s.completed })));
-    
-    res.json({ ...newItem, completed: !!newItem.completed });
+    const newItem = { ...req.body, id: Date.now(), time: "Just now", completed: false };
+    store.shoppingList.push(newItem);
+    saveData(store);
+    io.emit("shopping:updated", store.shoppingList.filter((s: any) => s.groupId === newItem.groupId));
+    res.json(newItem);
   });
 
   app.patch("/api/shopping/:id", (req, res) => {
     const { id } = req.params;
-    const { completed } = req.body;
-    db.prepare("UPDATE shopping_list SET completed = ? WHERE id = ?").run(completed ? 1 : 0, id);
-    
-    const item = db.prepare("SELECT groupId FROM shopping_list WHERE id = ?").get(id);
+    const item = store.shoppingList.find((s: any) => s.id === Number(id));
     if (item) {
-      const allItems = db.prepare("SELECT * FROM shopping_list WHERE groupId = ?").all(item.groupId);
-      io.emit("shopping:updated", allItems.map((s: any) => ({ ...s, completed: !!s.completed })));
+      Object.assign(item, req.body);
+      saveData(store);
+      io.emit("shopping:updated", store.shoppingList.filter((s: any) => s.groupId === item.groupId));
     }
-    
     res.json({ success: true });
   });
 

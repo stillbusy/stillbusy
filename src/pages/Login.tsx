@@ -21,15 +21,23 @@ const Login: React.FC = () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, password }),
       });
-      const data = await res.json();
+      
+      let data;
+      try {
+        data = await res.json();
+      } catch (e) {
+        throw new Error("Server returned an invalid response");
+      }
+
       if (res.ok) {
         login(data);
         navigate("/dashboard");
       } else {
         setError(data.error || "Login failed");
       }
-    } catch (err) {
-      setError("Something went wrong. Please try again.");
+    } catch (err: any) {
+      console.error("Login error:", err);
+      setError(err.message || "Something went wrong. Please try again.");
     }
   };
 

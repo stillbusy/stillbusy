@@ -21,15 +21,23 @@ const JoinGroup: React.FC = () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ userId: user?.id, name: groupName, room: roomNumber }),
       });
-      const data = await res.json();
+      
+      let data;
+      try {
+        data = await res.json();
+      } catch (e) {
+        throw new Error("Server returned an invalid response");
+      }
+
       if (res.ok) {
         updateUser(data.user);
         navigate("/dashboard");
       } else {
-        setError(data.error);
+        setError(data.error || "Failed to create group");
       }
-    } catch (err) {
-      setError("Failed to create group");
+    } catch (err: any) {
+      console.error("Create group error:", err);
+      setError(err.message || "Failed to create group");
     }
   };
 
@@ -41,15 +49,23 @@ const JoinGroup: React.FC = () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ userId: user?.id, code: groupCode, room: roomNumber }),
       });
-      const data = await res.json();
+      
+      let data;
+      try {
+        data = await res.json();
+      } catch (e) {
+        throw new Error("Server returned an invalid response");
+      }
+
       if (res.ok) {
         updateUser(data.user);
         navigate("/dashboard");
       } else {
-        setError(data.error);
+        setError(data.error || "Failed to join group");
       }
-    } catch (err) {
-      setError("Failed to join group");
+    } catch (err: any) {
+      console.error("Join group error:", err);
+      setError(err.message || "Failed to join group");
     }
   };
 
