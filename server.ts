@@ -224,5 +224,11 @@ async function startServer() {
   return app;
 }
 
-const appPromise = startServer();
-export default appPromise;
+// Start the server immediately
+startServer();
+
+// Export for Vercel/Serverless environments
+export default async (req: any, res: any) => {
+  const app = await startServer();
+  return app(req, res);
+};
